@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 
 processes = [2, 4, 6]
-rle_times = [49836512, 72112601, 76970520]
+rle_times = [43494940, 82871463, 79812612]
 lz77_times = [122533000000, 200544000000, 242339000000]
 huffman_times = [1413933128, 951274635, 1423257192]
 
