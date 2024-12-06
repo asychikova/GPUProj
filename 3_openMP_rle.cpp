@@ -11,19 +11,33 @@ using namespace std;
 string compressChunk(const string& chunk) {
     size_t n = chunk.size();
     string compressed = "";
+    
+    //variables to store the current character and its count
     char currentChar = chunk[0];
     int count = 1;
 
+    //use OpenMP to parallelize the iteration over the chunk
+    #pragma omp parallel for schedule(static) reduction(+:count) shared(compressed, currentChar)
     for (size_t i = 1; i < n; ++i) {
+        //check if the current character is equal to the last one
         if (chunk[i] == currentChar) {
             count++;
         } else {
-            compressed += currentChar + to_string(count);
-            currentChar = chunk[i];
-            count = 1;
+            //critical section to update the compressed string when switching characters
+            #pragma omp critical
+            {
+                compressed += currentChar + to_string(count);
+                currentChar = chunk[i];
+                count = 1;
+            }
         }
     }
-    compressed += currentChar + to_string(count); // handle the last character
+
+    //handle the last character
+    #pragma omp critical
+    {
+        compressed += currentChar + to_string(count);
+    }
     return compressed;
 }
 
@@ -134,8 +148,6 @@ long long compressRLE(const string& inputFile, const string& outputFile, int ran
     return omp_time_ns;
 }
 
-
-
 void decompressRLE(const string& inputFile, const string& outputFile) {
     ifstream input(inputFile, ios::binary);
     if (!input.is_open()) {
@@ -204,5 +216,6 @@ int main(int argc, char** argv) {
     MPI_Finalize(); //finalize MPI
     return 0;
 }
+
 
 
