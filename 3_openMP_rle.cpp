@@ -85,7 +85,7 @@ long long compressRLE(const string& inputFile, const string& outputFile, int ran
     auto omp_end = chrono::high_resolution_clock::now(); //end OpenMP timing
     long long omp_time_ns = chrono::duration_cast<chrono::nanoseconds>(omp_end - omp_start).count();
 
-    //gather all compressed results to rank 0
+    //gather compressed data size from all processes to rank 0
     vector<int> chunkSizes(size);
     int localSize = localCompressed.size();
     MPI_Gather(&localSize, 1, MPI_INT, chunkSizes.data(), 1, MPI_INT, 0, MPI_COMM_WORLD);
@@ -97,8 +97,25 @@ long long compressRLE(const string& inputFile, const string& outputFile, int ran
         }
     }
 
-    vector<char> allCompressed((rank == 0) ? displs[size - 1] + chunkSizes[size - 1] : 0);
-    MPI_Gatherv(localCompressed.data(), localSize, MPI_CHAR, allCompressed.data(), chunkSizes.data(), displs.data(), MPI_CHAR, 0, MPI_COMM_WORLD);
+    //gather compressed data from all processes to rank 0 using point-to-point communication
+    vector<char> allCompressed;
+    if (rank == 0) {
+        int totalSize = displs[size - 1] + chunkSizes[size - 1];
+        allCompressed.resize(totalSize);
+
+        //copy rank 0's own data
+        copy(localCompressed.begin(), localCompressed.end(), allCompressed.begin());
+
+        //receive data from other ranks
+        int offset = localSize;
+        for (int i = 1; i < size; ++i) {
+            MPI_Status status;
+            MPI_Recv(allCompressed.data() + displs[i], chunkSizes[i], MPI_CHAR, i, 0, MPI_COMM_WORLD, &status);
+        }
+    } else {
+        //send compressed data to rank 0
+        MPI_Send(localCompressed.data(), localSize, MPI_CHAR, 0, 0, MPI_COMM_WORLD);
+    }
 
     if (rank == 0) {
         //merge all compressed results into a single result
@@ -178,7 +195,7 @@ int main(int argc, char** argv) {
 
     double mpi_start_time = MPI_Wtime(); //start MPI timing
 
-    const string inputFile = "input1MB.txt";
+    const string inputFile = "input4MB.txt";
     const string compressedFile = "rlecompressed.txt"; 
     const string decompressedFile = "rledecompressed.txt"; 
 
@@ -216,6 +233,7 @@ int main(int argc, char** argv) {
     MPI_Finalize(); //finalize MPI
     return 0;
 }
+
 
 
 
