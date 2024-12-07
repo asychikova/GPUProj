@@ -3,7 +3,8 @@
 #include <string>
 #include <vector>
 #include <chrono>
-#include <mpi.h>  
+#include <mpi.h>
+#include <numeric>
 #include "/usr/local/opt/libomp/include/omp.h" // OpenMP
 
 using namespace std;
@@ -11,7 +12,7 @@ using namespace std;
 string compressChunk(const string& chunk) {
     size_t n = chunk.size();
     string compressed = "";
-    
+
     //variables to store the current character and its count
     char currentChar = chunk[0];
     int count = 1;
@@ -97,6 +98,9 @@ long long compressRLE(const string& inputFile, const string& outputFile, int ran
         }
     }
 
+    //start communication timing
+    double communication_start_time = MPI_Wtime();
+
     //gather compressed data from all processes to rank 0 using point-to-point communication
     vector<char> allCompressed;
     if (rank == 0) {
@@ -116,6 +120,10 @@ long long compressRLE(const string& inputFile, const string& outputFile, int ran
         //send compressed data to rank 0
         MPI_Send(localCompressed.data(), localSize, MPI_CHAR, 0, 0, MPI_COMM_WORLD);
     }
+
+    //end communication timing
+    double communication_end_time = MPI_Wtime();
+    double communication_time_ns = (communication_end_time - communication_start_time) * 1e9; // Convert to nanoseconds
 
     if (rank == 0) {
         //merge all compressed results into a single result
@@ -162,7 +170,7 @@ long long compressRLE(const string& inputFile, const string& outputFile, int ran
         output.close();
     }
 
-    return omp_time_ns;
+    return omp_time_ns + communication_time_ns;
 }
 
 void decompressRLE(const string& inputFile, const string& outputFile) {
@@ -193,41 +201,66 @@ int main(int argc, char** argv) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank); //get the rank of the current process
     MPI_Comm_size(MPI_COMM_WORLD, &size); //get the total number of processes
 
-    double mpi_start_time = MPI_Wtime(); //start MPI timing
+    double total_mpi_start_time = MPI_Wtime(); //start total MPI timing
 
     const string inputFile = "input4MB.txt";
-    const string compressedFile = "rlecompressed.txt"; 
-    const string decompressedFile = "rledecompressed.txt"; 
+    const string compressedFile = "rlecompressed.txt";
+    const string decompressedFile = "rledecompressed.txt";
 
+    //start compression timing
+    double compression_start_time = MPI_Wtime();
     long long omp_time_ns = compressRLE(inputFile, compressedFile, rank, size);
+    double compression_end_time = MPI_Wtime();
 
+    //calculate compression time for the local process in nanoseconds
+    double compression_time_ns = (compression_end_time - compression_start_time) * 1e9;
+
+    //reduce compression times to calculate the total compression time across all processes
+    double total_compression_time_ns = 0;
+    MPI_Reduce(&compression_time_ns, &total_compression_time_ns, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+
+    //synchronize all processes before starting communication timing
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    //start communication timing
+    double communication_start_time = MPI_Wtime();
+
+    //gather compressed data size from all processes to rank 0 (communication happens here)
+    vector<int> chunkSizes(size);
+    int localSize = omp_time_ns;  //assuming omp_time_ns represents the compressed data size
+    MPI_Gather(&localSize, 1, MPI_INT, chunkSizes.data(), 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+    //synchronize all processes after communication
+    MPI_Barrier(MPI_COMM_WORLD);
+
+    //end communication timing
+    double communication_end_time = MPI_Wtime();
+    double communication_time_ns = (communication_end_time - communication_start_time) * 1e9; //convert to nanoseconds
+
+    size_t text = 0;
     if (rank == 0) {
-        decompressRLE(compressedFile, decompressedFile);
+        text = accumulate(chunkSizes.begin(), chunkSizes.end(), 0UL);
     }
 
-    double mpi_end_time = MPI_Wtime(); //end MPI timing
-    double mpi_time_ns = (mpi_end_time - mpi_start_time) * 1e9; //convert MPI time to nanoseconds
-
-    //reduce OpenMP times to calculate the total time
-    long long total_omp_time_ns = 0;
-    MPI_Reduce(&omp_time_ns, &total_omp_time_ns, 1, MPI_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
-
-    //calculate total time for both MPI and OpenMP
-    long long total_time_ns = 0;
+    double total_mpi_end_time = MPI_Wtime(); //end total MPI timing
+    double total_time_ns = (total_mpi_end_time - total_mpi_start_time) * 1e9; //convert total time to nanoseconds
+    decompressRLE(compressedFile, decompressedFile);
     if (rank == 0) {
-        total_time_ns = mpi_time_ns + total_omp_time_ns; //total MPI + OpenMP time
-    }
+        //totalSize holds the input size in bytes
+        double total_time_ns = total_compression_time_ns + communication_time_ns;
 
-    if (rank == 0) {
+        //throughput Calculation (MB/s)
+        double total_time_seconds = static_cast<double>(total_time_ns) / 1e9;
+        double throughput = (static_cast<double>(text) / total_time_seconds) / 1e6; // throughput in MB/s
+
+        //display Performance Metrics
         cout << "-------------------" << endl;
-        cout << "Run Length Encoding" << endl;
+        cout << "Run Length Encoding (RLE)" << endl;
         cout << "-------------------" << endl;
-        for (int i = 0; i < size; ++i) {
-            cout << "Process " << i << " - OpenMP Compression Time: " << omp_time_ns << " nanoseconds\n";
-        }
-        cout << "Total OpenMP Time: " << total_omp_time_ns << " nanoseconds\n";
-        cout << "Total MPI Time: " << mpi_time_ns << " nanoseconds\n";
-        cout << "Total Time (MPI + OpenMP): " << total_time_ns << " nanoseconds\n";
+        cout << "Total Compression Time: " << total_compression_time_ns << " nanoseconds" << endl;
+        cout << "Total Communication Time: " << communication_time_ns << " nanoseconds" << endl;
+        cout << "Total Time (Compression + Communication): " << total_time_ns << " nanoseconds" << endl;
+        cout << "Throughput: " << throughput << " MB/s" << endl;
     }
 
     MPI_Finalize(); //finalize MPI
