@@ -1,27 +1,37 @@
 import matplotlib.pyplot as plt
 
+# Updated data from your table
 processes = [2, 4, 6]
-rle_times = [87501842, 115087679, 198115765]
-lz77_times = [261392000000, 459934000000, 525532000000]
-huffman_times = [2524528107, 2246334908, 3130329339]
+rle_times = [70058000, 65614000, 120798000]
+lz77_times = [80396700000, 71933200000, 72723300000]
+huffman_times = [364570672, 319244437, 449664847]
 
-plt.figure(figsize=(10, 6), facecolor='black') 
-ax = plt.gca()  
-ax.set_facecolor('black')  
+# Create the plot
+plt.figure(figsize=(10, 6), facecolor='black')
+ax = plt.gca()
+ax.set_facecolor('black')
 
+# Plot the data
 plt.plot(processes, rle_times, label='RLE', marker='o', color='cyan')
 plt.plot(processes, lz77_times, label='LZ77', marker='o', color='lime')
 plt.plot(processes, huffman_times, label='Huffman', marker='o', color='yellow')
 
+# Set labels and title
 plt.xlabel('Number of Processes', color='white')
 plt.ylabel('Compression Time (ns)', color='white')
 plt.title('Compression Times for 2MB File with Different Algorithms', color='white')
 
-plt.yscale('log')  
+# Set y-scale to logarithmic
+plt.yscale('log')
+
+# Customize tick labels
 plt.xticks(processes, color='white')
 plt.yticks(color='white')
+
+# Add grid and legend
 plt.grid(True, linestyle='--', alpha=0.6, color='white')
+plt.legend(facecolor='black', edgecolor='white', labelcolor='white')
 
-plt.legend(facecolor='black', edgecolor='white', labelcolor='white') 
-
+# Show the plot
 plt.show()
+
