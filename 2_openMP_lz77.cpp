@@ -2,7 +2,7 @@
 #include <fstream>
 #include <vector>
 #include <algorithm>
-#include <mpi.h> 
+#include <mpi.h>
 #include "/usr/local/opt/libomp/include/omp.h" // OpenMP
 
 using namespace std;
@@ -110,34 +110,6 @@ vector<LZ77Tuple> lz77Compress(const string& input) {
     return compressed;
 }
 
-//decompress using LZ77 algorithm
-string lz77Decompress(const vector<LZ77Tuple>& compressed) {
-    string decompressed;
-    for (const auto& tuple : compressed) {
-        if (tuple.offset == 0 && tuple.length == 0) {
-            //add the next character as it is
-            decompressed += tuple.nextChar;
-        } else {
-            //calculate start position for back reference
-            int start = decompressed.size() - tuple.offset;
-            if (start < 0) {
-                cerr << "Error: Offset is larger than current decompressed size." << endl;
-                continue;
-            }
-
-            //append the matching substring
-            for (int j = 0; j < tuple.length; ++j) {
-                decompressed += decompressed[start + j];
-            }
-
-            //add the next character after the matching substring
-            decompressed += tuple.nextChar;
-        }
-    }
-    return decompressed;
-}
-
-
 int main(int argc, char* argv[]) {
     MPI_Init(&argc, &argv);
 
@@ -146,10 +118,7 @@ int main(int argc, char* argv[]) {
     int world_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
-    //measure total MPI time
-    double mpi_start_time = MPI_Wtime();
-
-    ifstream inputFile("input1MB.txt");
+    ifstream inputFile("input4MB.txt");
     if (!inputFile) {
         cerr << "Error: Unable to open input file." << endl;
         MPI_Abort(MPI_COMM_WORLD, 1);
@@ -161,22 +130,26 @@ int main(int argc, char* argv[]) {
     size_t segment_size = input.size() / world_size;
     string segment = input.substr(world_rank * segment_size, segment_size);
 
-    //measure OpenMP time for compression
+    //measure compression time with OpenMP
     double omp_start_time = omp_get_wtime();
     vector<LZ77Tuple> compressed_segment = lz77Compress(segment);
     double omp_end_time = omp_get_wtime();
-
-    //report the time taken for compression by each process
     double omp_time_taken = omp_end_time - omp_start_time;
-    cout << "Process " << world_rank << " - OpenMP Compression Time: " << omp_time_taken * 1e9 << " nanoseconds" << endl;
 
     vector<char> serialized_segment = serialize(compressed_segment);
     int local_size = serialized_segment.size();
 
+    //gather OpenMP times across all processes to get the max compression time
+    double total_compression_time_ns = 0;
+    MPI_Reduce(&omp_time_taken, &total_compression_time_ns, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    total_compression_time_ns *= 1e9; //convert to nanoseconds
+
+    //gather compressed data sizes
     vector<int> segment_lengths(world_size);
     MPI_Gather(&local_size, 1, MPI_INT, segment_lengths.data(), 1, MPI_INT, 0, MPI_COMM_WORLD);
 
     vector<char> gathered_data;
+    double communication_start_time = MPI_Wtime();
     if (world_rank == 0) {
         int total_size = 0;
         for (int len : segment_lengths) {
@@ -194,33 +167,28 @@ int main(int argc, char* argv[]) {
     } else {
         MPI_Send(serialized_segment.data(), local_size, MPI_CHAR, 0, 0, MPI_COMM_WORLD);
     }
+    double communication_end_time = MPI_Wtime();
+    double communication_time_taken_ns = (communication_end_time - communication_start_time) * 1e9; //convert to nanoseconds
 
     if (world_rank == 0) {
-        vector<LZ77Tuple> final_compressed = deserialize(gathered_data);
+        //total Time Calculation
+        double total_time_ns = total_compression_time_ns + communication_time_taken_ns;
 
-        ofstream compressedFile("lz77compressed.txt", ios::binary);
-        for (const auto& tuple : final_compressed) {
-            compressedFile.write(reinterpret_cast<const char*>(&tuple), sizeof(LZ77Tuple));
-        }
-        compressedFile.close();
+        //throughput Calculation (MB/s)
+        double total_time_seconds = total_time_ns / 1e9;
+        double throughput = (input.size() / total_time_seconds) / 1e6; //throughput in MB/s
 
-        string decompressed = lz77Decompress(final_compressed);
-        ofstream decompressedFile("lz77decompressed.txt");
-        decompressedFile << decompressed;
-        decompressedFile.close();
-
-        double total_omp_time = 0;
-        for (int i = 0; i < world_size; ++i) {
-            total_omp_time += omp_time_taken;
-        }
-        cout << "Total OpenMP Time: " << total_omp_time * 1e9 << " nanoseconds" << endl;
-
-        double mpi_end_time = MPI_Wtime();
-        double mpi_time_taken = mpi_end_time - mpi_start_time;
-        cout << "Total MPI Time: " << mpi_time_taken * 1e9 << " nanoseconds" << endl;
-        cout << "Total Time (MPI + OpenMP): " << (total_omp_time + mpi_time_taken) * 1e9 << " nanoseconds" << endl;
+        //display the performance metrics
+        cout << "-------------------" << endl;
+        cout << "LZ77 Compression" << endl;
+        cout << "-------------------" << endl;
+        cout << "Total Compression Time: " << total_compression_time_ns << " nanoseconds" << endl;
+        cout << "Total Communication Time: " << communication_time_taken_ns << " nanoseconds" << endl;
+        cout << "Total Time: " << total_time_ns << " nanoseconds" << endl;
+        cout << "Throughput: " << throughput << " MB/s" << endl;
     }
 
     MPI_Finalize();
     return 0;
 }
+
