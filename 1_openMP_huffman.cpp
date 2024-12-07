@@ -79,25 +79,6 @@ string compressText(const string& text, const unordered_map<char, string>& huffm
     return compressed;
 }
 
-//function to decompress the compressed text
-string decompressText(const string& compressed, Node* root) {
-    string decompressed;
-    Node* current = root;
-    for (char bit : compressed) {
-        if (bit == '0') {
-            current = current->left.get();
-        } else {
-            current = current->right.get();
-        }
-
-        if (!current->left && !current->right) {
-            decompressed += current->character;
-            current = root;
-        }
-    }
-    return decompressed;
-}
-
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
 
@@ -152,60 +133,29 @@ int main(int argc, char** argv) {
     int globalFreqArray[256] = {0};
     MPI_Reduce(freqArray, globalFreqArray, 256, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
 
-    if (rank == 0) {
-        cout << "----------------" << endl;
-        cout << "Huffman Encoding" << endl;
-        cout << "----------------" << endl;
-        //output OpenMP times for all processes
-        long long total_omp_time = 0;
-        for (int i = 0; i < size; ++i) {
-            cout << "Process " << i << " - OpenMP Compression Time: " << omp_times[i] << " nanoseconds" << endl;
-            total_omp_time += omp_times[i];
-        }
-        cout << "Total OpenMP Time: " << total_omp_time << " nanoseconds" << endl;
-
-        //build Huffman Tree on root process
-        unordered_map<char, int> globalFreqMap;
-        for (int i = 0; i < 256; ++i) {
-            if (globalFreqArray[i] > 0) {
-                globalFreqMap[static_cast<char>(i)] = globalFreqArray[i];
-            }
-        }
-
-        unique_ptr<Node> root(buildHuffmanTree(globalFreqMap));
-
-        //generate Huffman codes
-        unordered_map<char, string> huffmanCodes;
-        generateHuffmanCodes(root.get(), "", huffmanCodes);
-
-        auto omp_compress_start = high_resolution_clock::now();
-        //compress text
-        string compressed = compressText(text, huffmanCodes);
-        auto omp_compress_end = high_resolution_clock::now();
-        auto omp_compress_duration = duration_cast<nanoseconds>(omp_compress_end - omp_compress_start).count();
-        
-
-        //write compressed text to file
-        ofstream compressedFile("huffman_compressed.txt");
-        compressedFile << compressed;
-        compressedFile.close();
-
-        //decompress text
-        string decompressed = decompressText(compressed, root.get());
-
-        //write decompressed text to file
-        ofstream decompressedFile("huffman_decompressed.txt");
-        decompressedFile << decompressed;
-        decompressedFile.close();
-    }
-
     auto mpi_end = high_resolution_clock::now();
-    auto mpi_duration = duration_cast<nanoseconds>(mpi_end - mpi_start).count();
+    auto communication_time_taken_ns = duration_cast<nanoseconds>(mpi_end - mpi_start).count();
+  
     if (rank == 0) {
-        cout << "Total MPI Time: " << mpi_duration << " nanoseconds" << endl;
-        cout << "Total Time (MPI + OpenMP): " << (mpi_duration + accumulate(omp_times.begin(), omp_times.end(), 0LL)) << " nanoseconds" << endl;
+        long long total_compression_time_ns = accumulate(omp_times.begin(), omp_times.end(), 0LL);
+        long long total_time_ns = total_compression_time_ns + communication_time_taken_ns;
+
+        // throughput Calculation
+        double total_time_seconds = static_cast<double>(total_time_ns) / 1e9;
+        double throughput = static_cast<double>(text.size()) / (total_time_seconds * 1e6); // MB/s
+
+        //output Performance Metrics
+        cout << "-------------------" << endl;
+        cout << "Huffman Compression" << endl;
+        cout << "-------------------" << endl;
+        cout << "Total Compression Time: " << total_compression_time_ns << " nanoseconds" << endl;
+        cout << "Total Communication Time: " << communication_time_taken_ns << " nanoseconds" << endl;
+        cout << "Total Time (Compression + Communication): " << total_time_ns << " nanoseconds" << endl;
+        cout << "Throughput: " << throughput << " MB/s" << endl;
     }
+
 
     MPI_Finalize();
     return 0;
 }
+
